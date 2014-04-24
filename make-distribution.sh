@@ -56,7 +56,7 @@ VERSION=$(echo "${VERSIONSTRING}" | tail -1 | cut -f 2 | sed 's/^\([a-zA-Z0-9.-]
 echo "Version is ${VERSION}"
 
 # Initialize defaults
-SPARK_HADOOP_VERSION=1.0.4
+SPARK_HADOOP_VERSION=2.0.0-mr1-cdh4.5.0
 SPARK_YARN=false
 SPARK_TACHYON=false
 MAKE_TGZ=false
