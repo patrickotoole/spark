@@ -45,7 +45,8 @@ class FileInputDStream[K: ClassTag, V: ClassTag, F <: NewInputFormat[K,V] : Clas
   // Files with mod time earlier than this is ignored. This is updated every interval
   // such that in the current interval, files older than any file found in the
   // previous interval will be ignored. Obviously this time keeps moving forward.
-  private var ignoreTime = if (newFilesOnly) 0L else System.currentTimeMillis()
+  private var ignoreTime = if (newFilesOnly) System.currentTimeMillis() else 0L
+  private var recursiveMinTime = 0L
 
   // Latest file mod time seen till any point of time
   @transient private var path_ : Path = null
@@ -99,17 +100,23 @@ class FileInputDStream[K: ClassTag, V: ClassTag, F <: NewInputFormat[K,V] : Clas
   /**
    * Find files recursively in a directory
    */
-  private def recursiveFileList(
-      fs: FileSystem, 
-      path: Path, 
-      filter: CustomPathFilter): 
-    Array[FileStatus] = {
-      fs.listStatus(path, filter).flatMap( (x: FileStatus) => 
-        x.isDirectory match {
-        case true => recursiveFileList(fs,x.getPath(),filter)
-        case _ => Array(x)
+  private def recursiveFileList(path: Path): Array[FileStatus] = {
+    var list = fs.listStatus(path)
+    val fileStatuses: Array[FileStatus] = list.flatMap( (fileStatus: FileStatus) => {
+      fileStatus.isDirectory match {
+        case true => {
+          val path = fileStatus.getPath
+          val subDir = recursiveFileList(path).filter(_.isDirectory)
+          if (subDir.length > 0) {
+            subDir
+          } else {
+            Array(fileStatus)
+          } 
+        }
+        case _ => Array[FileStatus]()
       }
-    )
+    })
+    fileStatuses
   } 
 
 
@@ -122,12 +129,14 @@ class FileInputDStream[K: ClassTag, V: ClassTag, F <: NewInputFormat[K,V] : Clas
     lastNewFileFindingTime = System.currentTimeMillis
     val filter = new CustomPathFilter(currentTime)
 
-    val newFiles: Array[String] = {
+    val filePaths: Array[Path] = {
       recursive match {
-        case true => recursiveFileList(fs, directoryPath, filter).map(_.getPath.toString)
-        case _ => fs.listStatus(directoryPath, filter).map(_.getPath.toString)
+        case true => recursiveFileList(directoryPath).map(_.getPath)
+        case _ => Array(directoryPath)
       }
     }
+
+    val newFiles: Array[String] = fs.listStatus(filePaths, filter).map(_.getPath.toString)
 
     val timeTaken = System.currentTimeMillis - lastNewFileFindingTime
     logInfo("Finding new files took " + timeTaken + " ms")
@@ -139,6 +148,7 @@ class FileInputDStream[K: ClassTag, V: ClassTag, F <: NewInputFormat[K,V] : Clas
           "files in the monitored directory."
       )
     }
+    logInfo("minNewFileModTime: " ++ filter.minNewFileModTime.toString)
     (newFiles, filter.minNewFileModTime)
   }
 
@@ -241,7 +251,8 @@ class FileInputDStream[K: ClassTag, V: ClassTag, F <: NewInputFormat[K,V] : Clas
           return false
         }
         val modTime = getFileModTime(path)
-        logDebug("Mod time for " + path + " is " + modTime)
+        logDebug("Mod time for " + path + " is " + modTime + " ignoreTime " + ignoreTime + " newModTime " + minNewFileModTime)
+
         if (modTime < ignoreTime) {
           // Reject file if it was created before the ignore time (or, before last interval)
           logDebug("Mod time " + modTime + " less than ignore time " + ignoreTime)
@@ -254,6 +265,7 @@ class FileInputDStream[K: ClassTag, V: ClassTag, F <: NewInputFormat[K,V] : Clas
         if (minNewFileModTime < 0 || modTime < minNewFileModTime) {
           minNewFileModTime = modTime
         }
+        logDebug("Rick " + modTime + " " + minNewFileModTime)
         logDebug("Accepted " + path)
       } catch {
         case fnfe: java.io.FileNotFoundException =>
@@ -264,6 +276,7 @@ class FileInputDStream[K: ClassTag, V: ClassTag, F <: NewInputFormat[K,V] : Clas
       true
     }
   }
+  
 }
 
 private[streaming]
